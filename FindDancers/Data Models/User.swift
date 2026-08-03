@@ -9,7 +9,7 @@ import Foundation
 
 enum UserType: String, Codable {
     case organisator
-    case nutzer
+    case user
 }
 
 struct User: Codable {

@@ -35,8 +35,8 @@ struct ContentView: View {
     
     var body: some View {
         VStack{
-            if sessionData != nil {
-                
+            if sessionData?.user != nil {
+                ProfilView(sessionData: $sessionData)
             } else {
                 VStack (spacing: 40){
                     Text("Was trifft auf dich am besten zu?")
@@ -82,9 +82,7 @@ struct ContentView: View {
         }
         .padding()
         .onAppear {
-            if let savedData = SessionDataManager.shared.load() {
-                self.sessionData = savedData
-            }
+            sessionData = SessionDataManager.shared.loadOrCreate()
         }
     }
     
@@ -96,7 +94,7 @@ struct ContentView: View {
             VStack(spacing: 20) {
                 Text("Bitte geben Sie Ihre Daten ein:")
                 TextField("Name", text: $registrierungOrganisatorDaten.name, onEditingChanged: { _ in startTypingTimer(inputString: "name", valueString: registrierungOrganisatorDaten.name) }).multilineTextAlignment(.center)
-                TextField("Passwort", text: $registrierungOrganisatorDaten.password, onEditingChanged: { _ in startTypingTimer(inputString: "password", valueString: registrierungOrganisatorDaten.password) }).multilineTextAlignment(.center)
+                SecureField("Passwort", text: $passwortOrganisator).textFieldStyle(.roundedBorder).frame(width: 300, height: 40).multilineTextAlignment(.center)
                 TextField("Adresse", text: Binding(
                     get: { registrierungOrganisatorDaten.adresse ?? "" },
                     set: { registrierungOrganisatorDaten.adresse = $0.isEmpty ? nil : $0; startTypingTimer(inputString: "adresse", valueString: registrierungOrganisatorDaten.adresse ?? "")  }
@@ -131,7 +129,10 @@ struct ContentView: View {
                 TextField("Name", text: $nameOrganisator).textFieldStyle(.roundedBorder).frame(width: 300, height: 40).multilineTextAlignment(.center)
                 SecureField("Passwort", text: $passwortOrganisator).textFieldStyle(.roundedBorder).frame(width: 300, height: 40).multilineTextAlignment(.center)
                 Button("Anmelden"){
-                    sessionData?.user = .init(name: nameOrganisator, type: .organisator)
+                    guard var currentSessionData = sessionData else { return }
+                    currentSessionData.user = .init(name: nameOrganisator, type: .organisator)
+                    sessionData = currentSessionData
+                    SessionDataManager.shared.save(currentSessionData)
                 }.buttonStyle(.bordered)
             }.background(Color.gray.opacity(0.1))
                 .padding(.horizontal, 30)
@@ -144,7 +145,10 @@ struct ContentView: View {
             TextField("Name", text: $nameUser).textFieldStyle(.roundedBorder).frame(width: 300, height: 40).multilineTextAlignment(.center)
             SecureField("Passwort", text: $passwortUser).textFieldStyle(.roundedBorder).frame(width: 300, height: 40).multilineTextAlignment(.center)
             Button("Anmelden"){
-               
+                guard var currentSessionData = sessionData else { return }
+                currentSessionData.user = .init(name: nameUser, type: .user)
+                sessionData = currentSessionData
+                SessionDataManager.shared.save(currentSessionData)
             }.buttonStyle(.bordered)
         }
         .background(Color.gray.opacity(0.1))

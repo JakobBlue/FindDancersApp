@@ -21,7 +21,8 @@ final class SessionDataManager {
     
     // MARK: - Speichern
     
-    func save(_ data: AppSessionData) {
+    @discardableResult
+    func save(_ data: AppSessionData) -> Bool {
         do {
             let encoder = JSONEncoder()
             encoder.outputFormatting = .prettyPrinted
@@ -29,8 +30,10 @@ final class SessionDataManager {
             
             try encodedData.write(to: fileURL, options: [.atomic, .completeFileProtection])
             print("Daten erfolgreich gespeichert unter \(fileURL.path)")
+            return true
         } catch {
             print("Fehler beim Speichern: \(error.localizedDescription)")
+            return false
         }
     }
     
@@ -50,5 +53,15 @@ final class SessionDataManager {
             print("Fehler beim Laden: \(error.localizedDescription)")
             return nil
         }
+    }
+    
+    func loadOrCreate() -> AppSessionData {
+        if let data = load() {
+            return data
+        }
+        
+        let data = AppSessionData(user: nil)
+        save(data)
+        return data
     }
 }
