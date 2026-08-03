@@ -35,8 +35,8 @@ struct ContentView: View {
     
     var body: some View {
         VStack{
-            if sessionData?.user != nil {
-                ProfilView(sessionData: $sessionData)
+            if let user = sessionData?.user {
+                authenticatedTabView(for: user)
             } else {
                 VStack (spacing: 40){
                     Text("Was trifft auf dich am besten zu?")
@@ -86,6 +86,29 @@ struct ContentView: View {
         }
     }
     
+    @ViewBuilder
+    func authenticatedTabView(for user: User) -> some View {
+        TabView {
+            ProfilView(sessionData: $sessionData)
+                .tabItem {
+                    Label("Profil", systemImage: "person")
+                }
+            Text("Events")
+                .tabItem {
+                    Label("Events", systemImage: "calendar")
+                }
+            if user.type == .user {
+                Text("Anfragen")
+                    .tabItem {
+                        Label("Anfragen", systemImage: "envelope")
+                    }
+                Text("Chats")
+                    .tabItem {
+                        Label("Chats", systemImage: "message")
+                    }
+            }
+        }
+    }
     
     var RegistrierungOrganisator: some View {
         let isFormValid = !registrierungOrganisatorDaten.name.isEmpty && !registrierungOrganisatorDaten.password.isEmpty
