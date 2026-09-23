@@ -19,6 +19,7 @@ struct ProfilView: View {
                 if SessionDataManager.shared.save(currentSessionData) {
                     sessionData = currentSessionData
                 }
+                Task { await EVAPIClient.shared.clearCredentials() }
             }
             .padding()
             .buttonStyle(.bordered)

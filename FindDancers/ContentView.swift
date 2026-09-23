@@ -24,7 +24,9 @@ struct ContentView: View {
     @State private var passwortUser: String = ""
     @State private var responseText = ""
     @State private var typingTimer: Timer? = nil
-    
+    @State private var isBusy = false
+    @State private var fehlermeldung: String?
+
     func startTypingTimer(inputString: String, valueString: String) {
         typingTimer?.invalidate()
         typingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: false) { _ in
@@ -32,7 +34,7 @@ struct ContentView: View {
             //             DatabaseManager().printRegistrierungOrganisatorDaten()
         }
     }
-    
+
     var body: some View {
         VStack{
             if let user = sessionData?.user {
@@ -85,7 +87,7 @@ struct ContentView: View {
             sessionData = SessionDataManager.shared.loadOrCreate()
         }
     }
-    
+
     @ViewBuilder
     func authenticatedTabView(for user: User) -> some View {
         TabView {
@@ -93,7 +95,7 @@ struct ContentView: View {
                 .tabItem {
                     Label("Profil", systemImage: "person")
                 }
-            Text("Events")
+            NurCreateEvents(organizerId: user.organizerId)
                 .tabItem {
                     Label("Events", systemImage: "calendar")
                 }
@@ -109,10 +111,12 @@ struct ContentView: View {
             }
         }
     }
-    
+
     var RegistrierungOrganisator: some View {
-        let isFormValid = !registrierungOrganisatorDaten.name.isEmpty && !registrierungOrganisatorDaten.password.isEmpty
-        
+        let isFormValid = !registrierungOrganisatorDaten.name.isEmpty
+            && !passwortOrganisator.isEmpty
+            && !(registrierungOrganisatorDaten.email ?? "").isEmpty
+
         return NavigationStack {
             VStack(spacing: 20) {
                 Text("Bitte geben Sie Ihre Daten ein:")
@@ -128,13 +132,18 @@ struct ContentView: View {
                     set: { registrierungOrganisatorDaten.email = $0.isEmpty ? nil : $0; startTypingTimer(inputString: "email", valueString: registrierungOrganisatorDaten.email ?? "")  }
                 ))
                 .multilineTextAlignment(.center)
+                .textInputAutocapitalization(.never)
+                .keyboardType(.emailAddress)
                 Button("Abschicken") {
-                   
+                    Task { await registriereOrganisator() }
                 }.buttonStyle(.bordered)
-                    .disabled(!isFormValid)
+                    .disabled(!isFormValid || isBusy)
+                if isBusy {
+                    ProgressView()
+                }
                 Spacer()
                 Button("Direkt zu Create Events"){
-                
+
                 }.buttonStyle(.bordered)
                     .background(Color.blue.opacity(0.1))
             }
@@ -143,25 +152,42 @@ struct ContentView: View {
                 // CreateEvents(loggedInUser: UserSession.shared.loggedInUser)
             }
         }
+        .alert("Registrierung fehlgeschlagen", isPresented: zeigtFehler) {
+            Button("OK", role: .cancel) { fehlermeldung = nil }
+        } message: {
+            Text(fehlermeldung ?? "")
+        }
     }
-    
+
     var AnmeldungOrganisator: some View {
         VStack {
             VStack (spacing: 40){
                 Text("Anmelden als Organisator").font(.headline).fontWeight(.bold)
-                TextField("Name", text: $nameOrganisator).textFieldStyle(.roundedBorder).frame(width: 300, height: 40).multilineTextAlignment(.center)
+                // Die EV-API erwartet die E-Mail als Basic-Auth-Benutzernamen.
+                TextField("E-Mail", text: $nameOrganisator)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 300, height: 40)
+                    .multilineTextAlignment(.center)
+                    .textInputAutocapitalization(.never)
+                    .keyboardType(.emailAddress)
                 SecureField("Passwort", text: $passwortOrganisator).textFieldStyle(.roundedBorder).frame(width: 300, height: 40).multilineTextAlignment(.center)
                 Button("Anmelden"){
-                    guard var currentSessionData = sessionData else { return }
-                    currentSessionData.user = .init(name: nameOrganisator, type: .organisator)
-                    sessionData = currentSessionData
-                    SessionDataManager.shared.save(currentSessionData)
+                    Task { await meldeOrganisatorAn() }
                 }.buttonStyle(.bordered)
+                    .disabled(nameOrganisator.isEmpty || passwortOrganisator.isEmpty || isBusy)
+                if isBusy {
+                    ProgressView()
+                }
             }.background(Color.gray.opacity(0.1))
                 .padding(.horizontal, 30)
         }
+        .alert("Anmeldung fehlgeschlagen", isPresented: zeigtFehler) {
+            Button("OK", role: .cancel) { fehlermeldung = nil }
+        } message: {
+            Text(fehlermeldung ?? "")
+        }
     }
-    
+
     var AnmeldungUser: some View {
         VStack (spacing: 40){
             Text("Anmelden als Benutzer").font(.headline).fontWeight(.bold)
@@ -169,12 +195,91 @@ struct ContentView: View {
             SecureField("Passwort", text: $passwortUser).textFieldStyle(.roundedBorder).frame(width: 300, height: 40).multilineTextAlignment(.center)
             Button("Anmelden"){
                 guard var currentSessionData = sessionData else { return }
-                currentSessionData.user = .init(name: nameUser, type: .user)
+                currentSessionData.user = User(name: nameUser, type: .user)
                 sessionData = currentSessionData
                 SessionDataManager.shared.save(currentSessionData)
             }.buttonStyle(.bordered)
         }
         .background(Color.gray.opacity(0.1))
+    }
+
+    // MARK: - EV-API
+
+    private var zeigtFehler: Binding<Bool> {
+        Binding(
+            get: { fehlermeldung != nil },
+            set: { if !$0 { fehlermeldung = nil } }
+        )
+    }
+
+    /// Registriert einen Organisator über `POST /Organizer` (plus `UserAccount`
+    /// für die Zugangsdaten, siehe `EVAPIClient.registerOrganizer`).
+    private func registriereOrganisator() async {
+        let name = registrierungOrganisatorDaten.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let email = (registrierungOrganisatorDaten.email ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let passwort = passwortOrganisator
+
+        isBusy = true
+        defer { isBusy = false }
+
+        do {
+            let (organizer, account) = try await EVAPIClient.shared.registerOrganizer(
+                name: name,
+                email: email,
+                password: passwort
+            )
+
+            uebernehmeAnmeldung(
+                User(
+                    name: account.name ?? name,
+                    type: .organisator,
+                    userAccountId: account.id,
+                    organizerId: organizer.id,
+                    email: account.email ?? email
+                )
+            )
+        } catch {
+            fehlermeldung = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// Meldet den Organisator über die HTTP-Basic-Authentifizierung der EV-API an.
+    private func meldeOrganisatorAn() async {
+        let email = nameOrganisator.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        isBusy = true
+        defer { isBusy = false }
+
+        do {
+            let account = try await EVAPIClient.shared.signIn(
+                email: email,
+                password: passwortOrganisator
+            )
+
+            uebernehmeAnmeldung(
+                User(
+                    name: account?.name ?? email,
+                    type: .organisator,
+                    userAccountId: account?.id,
+                    organizerId: account?.organizer?.id,
+                    email: account?.email ?? email
+                )
+            )
+        } catch {
+            fehlermeldung = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    private func uebernehmeAnmeldung(_ user: User) {
+        var currentSessionData = sessionData ?? AppSessionData(user: nil)
+        currentSessionData.user = user
+        SessionDataManager.shared.save(currentSessionData)
+        sessionData = currentSessionData
+
+        passwortOrganisator = ""
+        showRegistrierungOrganisator = false
+        showLoginOrganisator = false
+        showOrganisatorAnmeOderRegis = false
     }
 }
 
