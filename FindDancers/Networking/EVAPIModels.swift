@@ -52,6 +52,21 @@ nonisolated struct EVEngagement: Codable, Identifiable, Hashable, Sendable {
     var description: String?
     var venueId: String?
     var venue: EVVenue?
+    /// Neue Column, siehe integration-aufgaben.md. Als `String` auf der
+    /// Leitung, damit ein unbekannter Wert nicht die ganze Antwort unlesbar
+    /// macht – `typ` liefert den passenden Fall.
+    var engagementTyp: String?
+    /// Neue Column: Tanzname -> ausgewählt.
+    var taenze: [String: Bool]?
+
+    var typ: EventTyp? {
+        engagementTyp.flatMap(EventTyp.init(rawValue:))
+    }
+
+    /// Die aktivierten Tänze in Katalogreihenfolge.
+    var aktiveTaenze: [String] {
+        TanzKatalog.aktivierte(in: taenze ?? [:])
+    }
 }
 
 // MARK: - Request-Bodies
@@ -83,6 +98,8 @@ nonisolated struct EVCreateEngagementRequest: Encodable {
     var end: String
     var description: String
     var venueId: String?
+    var engagementTyp: String?
+    var taenze: [String: Bool]?
 }
 
 // MARK: - Fehler-Body

@@ -16,6 +16,7 @@ struct NurCreateEvents: View {
     /// siehe `EventFormularStore`.
     @State private var entwurf: EventFormularEntwurf
     @State private var verfuegbareOrte: [EVVenue] = []
+    @State private var taenzeAusgeklappt = false
     @State private var isBusy = false
     @State private var statusMeldung: String?
     @State private var fehlermeldung: String?
@@ -64,14 +65,10 @@ struct NurCreateEvents: View {
                                    .padding()
                                    .frame(width: 300)
 //                Text("Datum:")
-                DatePicker("Beginn", selection: $entwurf.beginn)
-                    .padding(.horizontal)
-                    .frame(width: 320)
-                DatePicker("Ende", selection: $entwurf.ende, in: entwurf.beginn...)
-                    .padding(.horizontal)
-                    .frame(width: 320)
+                datumsAuswahl
 //                Text("Ort:")
                 ortAuswahl
+                taenzeAuswahl
                 ImageUploaderView(dateiName: $entwurf.bildDateiname)
                 Button(action: {
                     Task { await erstelleEngagement() }
@@ -107,6 +104,88 @@ struct NurCreateEvents: View {
         }
     }
 
+    // MARK: - Datumsauswahl
+
+    /// Bei „Kurs“ wechselt die Datumsauswahl: die beiden Picker beschreiben
+    /// dann den **ersten** Termin und darunter kommt das Enddatum der
+    /// wöchentlichen Reihe dazu.
+    @ViewBuilder
+    private var datumsAuswahl: some View {
+        let istKurs = entwurf.typ == .Kurs
+
+        DatePicker(istKurs ? "1. Termin" : "Beginn", selection: $entwurf.beginn)
+            .padding(.horizontal)
+            .frame(width: 350)
+        DatePicker(
+            istKurs ? "1. Termin Ende" : "Ende",
+            selection: $entwurf.ende,
+            in: entwurf.beginn...
+        )
+        .padding(.horizontal)
+        .frame(width: 350)
+
+        if istKurs {
+            DatePicker(
+                "wöchentlich gleich bleibend bis",
+                selection: kursEndeAuswahl,
+                in: entwurf.beginn...,
+                displayedComponents: .date
+            )
+            .font(.subheadline)
+            .padding(.horizontal)
+            .frame(width: 350)
+
+            Text(kursReiheZusammenfassung)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+        }
+        // Beim Wechsel auf „Kurs“ ein sinnvolles Enddatum vorbelegen, damit der
+        // Picker einen Wert hat. Ein bereits gewähltes Datum bleibt erhalten,
+        // auch wenn zwischenzeitlich ein anderer Typ ausgewählt war.
+        EmptyView()
+            .onChange(of: entwurf.typ) { _, neuerTyp in
+                guard neuerTyp == .Kurs, entwurf.letztes_datum_von_Kurs == nil else { return }
+                entwurf.letztes_datum_von_Kurs = Calendar.current.date(
+                    byAdding: .day,
+                    value: 7,
+                    to: entwurf.beginn
+                )
+            }
+    }
+
+    /// Der DatePicker braucht einen nicht-optionalen Wert; solange keiner
+    /// gesetzt ist, zeigt er den ersten Termin.
+    private var kursEndeAuswahl: Binding<Date> {
+        Binding(
+            get: { entwurf.letztes_datum_von_Kurs ?? entwurf.beginn },
+            set: { entwurf.letztes_datum_von_Kurs = $0 }
+        )
+    }
+
+    private var kursReiheZusammenfassung: String {
+        let termine = entwurf.kursTermine
+        guard let letzter = termine.last else {
+            return "Enddatum liegt vor dem 1. Termin – es wird ein einzelner Termin angelegt."
+        }
+        return termine.count == 1
+            ? "1 Termin am \(Self.tagesDatum(termine[0].beginn))."
+            : "\(termine.count) wöchentliche Termine, letzter am \(Self.tagesDatum(letzter.beginn))."
+    }
+
+    /// DD-MM-YYYY, unabhängig von der Gerätesprache. Der DatePicker selbst
+    /// zeigt weiterhin das Format der eingestellten Region.
+    private static func tagesDatum(_ datum: Date) -> String {
+        datum.formatted(
+            .verbatim(
+                "\(day: .twoDigits)-\(month: .twoDigits)-\(year: .defaultDigits)",
+                timeZone: .current,
+                calendar: .current
+            )
+        )
+    }
+
     // MARK: - Ortsauswahl
 
     /// Zwei Seiten, zwischen denen horizontal gewischt wird. Der aktive Modus
@@ -122,39 +201,23 @@ struct NurCreateEvents: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
 
-            ScrollView(.horizontal) {
-                HStack(spacing: 0) {
-                    bestehenderOrtSeite
-                        .containerRelativeFrame(.horizontal)
-                        .id(OrtModus.bestehenderOrt)
-                    neuerOrtSeite
-                        .containerRelativeFrame(.horizontal)
-                        .id(OrtModus.neuerOrt)
-                }
-                .scrollTargetLayout()
+            // Paged TabView statt ScrollView mit `scrollPosition`: nur die
+            // Selection des TabView stellt beim ersten Layout verlässlich die
+            // gespeicherte Seite wieder her.
+            TabView(selection: $entwurf.ortModus) {
+                bestehenderOrtSeite
+                    .tag(OrtModus.bestehenderOrt)
+                neuerOrtSeite
+                    .tag(OrtModus.neuerOrt)
             }
-            .scrollTargetBehavior(.paging)
-            .scrollIndicators(.hidden)
-            .scrollPosition(id: sichtbarerOrtModus)
-            .frame(height: 340)
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .frame(height: 480)
 
             seitenIndikator
         }
         .padding(.vertical)
-    }
-
-    /// `scrollPosition` meldet die gewischte Seite hier zurück und scrollt
-    /// umgekehrt zur gespeicherten Seite, wenn das Formular geladen wird.
-    private var sichtbarerOrtModus: Binding<OrtModus?> {
-        Binding(
-            get: { entwurf.ortModus },
-            set: { neuerModus in
-                if let neuerModus, neuerModus != entwurf.ortModus {
-                    entwurf.ortModus = neuerModus
-                }
-            }
-        )
     }
 
     private var bestehenderOrtSeite: some View {
@@ -186,10 +249,11 @@ struct NurCreateEvents: View {
             ortFeld("PLZ", text: $entwurf.neuerOrt.zipcode)
                 .keyboardType(.numbersAndPunctuation)
             ortFeld("Stadt", text: $entwurf.neuerOrt.city)
-            ortFeld("Breitengrad, z. B. 49.8728", text: $entwurf.neuerOrt.latitude)
-                .keyboardType(.numbersAndPunctuation)
-            ortFeld("Längengrad, z. B. 8.6512", text: $entwurf.neuerOrt.longitude)
-                .keyboardType(.numbersAndPunctuation)
+            // Koordinaten werden nicht getippt, sondern über die Karte gesetzt.
+            OrtKarteView(
+                latitude: $entwurf.neuerOrt.latitude,
+                longitude: $entwurf.neuerOrt.longitude
+            )
 
             if !entwurf.neuerOrt.istLeer && !entwurf.neuerOrt.istVollstaendig {
                 // Die EV-API lehnt eine Venue mit fehlenden Feldern ab.
@@ -225,6 +289,54 @@ struct NurCreateEvents: View {
         [ort.name, ort.city].compactMap { $0 }.joined(separator: ", ")
     }
 
+    // MARK: - Tänze
+
+    /// Die Tanzauswahl geht als `taenze` (Tanzname -> Bool) an die EV-API.
+    ///
+    /// Bewusst ein `DisclosureGroup` mit VStack statt einer `List` wie in
+    /// `AddTanzView`: das Formular steckt schon in einem `ScrollView`, eine
+    /// verschachtelte `List` würde einen zweiten vertikalen Scrollbereich
+    /// aufziehen. Die Zeilen selbst sind identisch aufgebaut.
+    private var taenzeAuswahl: some View {
+        DisclosureGroup(isExpanded: $taenzeAusgeklappt) {
+            VStack(spacing: 0) {
+                ForEach(TanzKatalog.namen.sorted(by: >), id: \.self) { tanz in
+                    HStack {
+                        Text(tanz)
+                        Spacer()
+                        Toggle("", isOn: Binding(
+                            get: { entwurf.taenze[tanz] ?? false },
+                            set: { neuerWert in entwurf.taenze[tanz] = neuerWert }
+                        ))
+                        .labelsHidden() // Versteckt das "Toggle"-Label
+                    }
+                    .padding(15)
+                    Divider()
+                }
+            }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "figure.socialdance")
+                Text("Tänze")
+                Spacer()
+                Text(taenzeZusammenfassung)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 8)
+    }
+
+    private var taenzeZusammenfassung: String {
+        let aktive = entwurf.aktiveTaenze
+        switch aktive.count {
+        case 0: return "keine ausgewählt"
+        case 1: return aktive[0]
+        default: return "\(aktive.count) ausgewählt"
+        }
+    }
+
     // MARK: - EV-API
 
     private var zeigtFehler: Binding<Bool> {
@@ -234,39 +346,82 @@ struct NurCreateEvents: View {
         )
     }
 
-    /// Legt das Event an: je nach Seite zuerst `POST /Venue`, dann
-    /// `POST /Engagement`, `PUT /Engagement/{id}/Organizers` und – falls ein
-    /// Bild gewählt wurde – `POST /Engagement/{id}/File`.
+    /// Legt das Event an: je nach Seite zuerst `POST /Venue`, dann je Termin
+    /// `POST /Engagement` plus `PUT /Engagement/{id}/Organizers` und – falls
+    /// ein Bild gewählt wurde – `POST /Engagement/{id}/File`.
+    ///
+    /// Bei einem Kurs mit Enddatum entsteht pro Woche ein eigenes Engagement.
+    /// Ort, Name, Beschreibung, Typ und Tänze sind für alle gleich; nur Beginn
+    /// und Ende wandern um je sieben Tage weiter. Die Venue wird trotzdem nur
+    /// einmal angelegt, und das Bild hängt nur am ersten Termin.
     private func erstelleEngagement() async {
         isBusy = true
         statusMeldung = nil
         defer { isBusy = false }
 
+        // Ohne Reihe bleibt es der eine Termin aus dem Formular.
+        let termine = entwurf.kursTermine.isEmpty
+            ? [(beginn: entwurf.beginn, ende: entwurf.ende)]
+            : entwurf.kursTermine
+
+        var erstellteIds: [String] = []
+
         do {
             let venueId = try await ermittleVenueId()
 
-            let engagement = try await EVAPIClient.shared.createEngagement(
-                title: entwurf.name.trimmed,
-                start: entwurf.beginn,
-                end: entwurf.ende,
-                description: entwurf.beschreibung,
-                venueId: venueId
-            )
-
-            if let organizerId {
-                try await EVAPIClient.shared.assignOrganizers(
-                    engagementId: engagement.id,
-                    organizerIds: [organizerId]
+            for (nummer, termin) in termine.enumerated() {
+                let engagement = try await EVAPIClient.shared.createEngagement(
+                    title: entwurf.name.trimmed,
+                    start: termin.beginn,
+                    end: termin.ende,
+                    description: entwurf.beschreibung,
+                    venueId: venueId,
+                    typ: entwurf.typ,
+                    taenze: entwurf.taenze
                 )
+                erstellteIds.append(engagement.id)
+
+                if let organizerId {
+                    try await EVAPIClient.shared.assignOrganizers(
+                        engagementId: engagement.id,
+                        organizerIds: [organizerId]
+                    )
+                }
+
+                if nummer == 0 {
+                    try await ladeBildHoch(engagementId: engagement.id)
+                }
+
+                if termine.count > 1 {
+                    statusMeldung = "Termin \(nummer + 1) von \(termine.count) erstellt …"
+                }
             }
 
-            try await ladeBildHoch(engagementId: engagement.id)
-
-            statusMeldung = "Event „\(engagement.title ?? entwurf.name)“ erstellt (ID \(engagement.id))."
+            statusMeldung = erfolgsMeldung(fuer: erstellteIds)
             verwerfeEntwurf()
         } catch {
-            fehlermeldung = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            let grund = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            // Bei einer Reihe kann die Hälfte schon auf dem Server liegen –
+            // das muss sichtbar sein, sonst legt der Nutzer Dubletten an.
+            fehlermeldung = erstellteIds.isEmpty
+                ? grund
+                : """
+                  \(grund)
+
+                  \(erstellteIds.count) von \(termine.count) Terminen wurden \
+                  bereits angelegt und bleiben bestehen. Das Formular wird \
+                  nicht geleert.
+                  """
+            statusMeldung = nil
         }
+    }
+
+    private func erfolgsMeldung(fuer ids: [String]) -> String {
+        guard let ersteId = ids.first else { return "" }
+        let titel = entwurf.name.trimmed
+        return ids.count == 1
+            ? "Event „\(titel)“ erstellt (ID \(ersteId))."
+            : "\(ids.count) wöchentliche Termine für „\(titel)“ erstellt."
     }
 
     private func ermittleVenueId() async throws -> String? {

@@ -16,12 +16,33 @@ struct OrtKarteView: View {
     @Binding var latitude: Double?
     @Binding var longitude: Double?
 
-    @State private var kamera: MapCameraPosition = .automatic
+    @State private var kamera: MapCameraPosition
     /// Nur für die Optik während des Ziehens – die Koordinate wird erst beim
     /// Loslassen gesetzt.
     @State private var ziehVerschiebung: CGSize = .zero
     @State private var laedtStandort = false
     @State private var hinweis: String?
+
+    /// Die Startkamera steht schon beim ersten Layout richtig: auf einer
+    /// gespeicherten Pin, sonst auf dem Standort des Nutzers.
+    init(latitude: Binding<Double?>, longitude: Binding<Double?>) {
+        _latitude = latitude
+        _longitude = longitude
+
+        if let breite = latitude.wrappedValue, let laenge = longitude.wrappedValue {
+            _kamera = State(
+                initialValue: .region(
+                    MKCoordinateRegion(
+                        center: CLLocationCoordinate2D(latitude: breite, longitude: laenge),
+                        latitudinalMeters: 600,
+                        longitudinalMeters: 600
+                    )
+                )
+            )
+        } else {
+            _kamera = State(initialValue: .userLocation(fallback: .automatic))
+        }
+    }
 
     private var koordinate: CLLocationCoordinate2D? {
         guard let latitude, let longitude else { return nil }
@@ -86,8 +107,6 @@ struct OrtKarteView: View {
             // gesetzte Pin wird nicht überschrieben.
             if koordinate == nil {
                 await uebernehmeAktuellenStandort()
-            } else {
-                zeigeAufKarte()
             }
         }
     }

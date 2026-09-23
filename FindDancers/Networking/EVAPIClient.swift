@@ -91,7 +91,7 @@ actor EVAPIClient {
                 URLQueryItem(name: "_size", value: "1000"),
                 URLQueryItem(name: "_fields", value: "id,name,email,organizer")
             ],
-            credentials: candidate,
+            anmeldung: .explizit(candidate),
             as: EVPage<EVUserAccount>.self
         )
 
@@ -147,6 +147,7 @@ actor EVAPIClient {
             method: "POST",
             path: "/UserAccount",
             body: encode(EVCreateUserAccountRequest(name: name, email: email, password: password)),
+            anmeldung: .keine,
             as: EVUserAccount.self
         )
     }
@@ -162,19 +163,28 @@ actor EVAPIClient {
     // MARK: - Engagement
 
     /// `POST /Engagement`
+    ///
+    /// `typ` und `taenze` sind die beiden neuen Columns aus
+    /// integration-aufgaben.md. Bis das Backend sie kennt, verwirft der Server
+    /// unbekannte Felder stillschweigend (er antwortet trotzdem mit 201) – die
+    /// Aufrufe hier funktionieren also schon vorher, nur ohne Wirkung.
     func createEngagement(
         title: String,
         start: Date,
         end: Date,
         description: String,
-        venueId: String?
+        venueId: String?,
+        typ: EventTyp? = nil,
+        taenze: [String: Bool]? = nil
     ) async throws -> EVEngagement {
         let request = EVCreateEngagementRequest(
             title: title,
             start: EVAPIDateFormat.string(from: start),
             end: EVAPIDateFormat.string(from: end),
             description: description,
-            venueId: venueId
+            venueId: venueId,
+            engagementTyp: typ?.rawValue,
+            taenze: taenze
         )
         return try await send(
             method: "POST",
@@ -190,6 +200,33 @@ actor EVAPIClient {
             method: "PUT",
             path: "/Engagement/\(engagementId)/Organizers",
             body: encode(organizerIds)
+        )
+    }
+
+    /// `POST /Engagement/{id}/File` – hängt eine Datei als `multipart/form-data`
+    /// an ein bestehendes Engagement. Die EngagementId gibt es erst nach
+    /// `POST /Engagement`, der Upload läuft deshalb immer als zweiter Schritt.
+    func attachFile(
+        engagementId: String,
+        dateiName: String,
+        mimeTyp: String,
+        daten: Data,
+        isPublic: Bool = true
+    ) async throws {
+        let grenze = "Boundary-\(UUID().uuidString)"
+        var koerper = Data()
+        koerper.append("--\(grenze)\r\n")
+        koerper.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(dateiName)\"\r\n")
+        koerper.append("Content-Type: \(mimeTyp)\r\n\r\n")
+        koerper.append(daten)
+        koerper.append("\r\n--\(grenze)--\r\n")
+
+        try await sendIgnoringResponse(
+            method: "POST",
+            path: "/Engagement/\(engagementId)/File",
+            query: [URLQueryItem(name: "isPublic", value: isPublic ? "true" : "false")],
+            body: koerper,
+            contentType: "multipart/form-data; boundary=\(grenze)"
         )
     }
 
@@ -221,6 +258,26 @@ actor EVAPIClient {
 
     // MARK: - Transport
 
+    /// Welche Zugangsdaten eine Anfrage mitschickt.
+    private enum Anmeldung {
+        /// Die gespeicherten Zugangsdaten der laufenden Sitzung.
+        case gespeicherte
+        /// Zugangsdaten, die erst geprüft werden (Login).
+        case explizit(EVAPICredentials)
+        /// Ohne `Authorization`-Header. Nötig für `POST /UserAccount`: der
+        /// Server prüft den Header, bevor er den Handler erreicht, und würde
+        /// eine Registrierung mit alten Zugangsdaten mit 401 ablehnen.
+        case keine
+
+        func credentials(gespeicherte: EVAPICredentials?) -> EVAPICredentials? {
+            switch self {
+            case .gespeicherte: return gespeicherte
+            case .explizit(let eigene): return eigene
+            case .keine: return nil
+            }
+        }
+    }
+
     private func encode(_ value: some Encodable) throws -> Data {
         try JSONEncoder().encode(value)
     }
@@ -230,11 +287,11 @@ actor EVAPIClient {
         path: String,
         query: [URLQueryItem] = [],
         body: Data? = nil,
-        credentials: EVAPICredentials? = nil,
+        anmeldung: Anmeldung = .gespeicherte,
         as responseType: Response.Type
     ) async throws -> Response {
         let data = try await perform(
-            makeRequest(method: method, path: path, query: query, body: body, credentials: credentials)
+            makeRequest(method: method, path: path, query: query, body: body, anmeldung: anmeldung)
         )
         do {
             return try JSONDecoder().decode(Response.self, from: data)
@@ -248,10 +305,18 @@ actor EVAPIClient {
         path: String,
         query: [URLQueryItem] = [],
         body: Data? = nil,
-        credentials: EVAPICredentials? = nil
+        contentType: String = "application/json",
+        anmeldung: Anmeldung = .gespeicherte
     ) async throws {
         _ = try await perform(
-            makeRequest(method: method, path: path, query: query, body: body, credentials: credentials)
+            makeRequest(
+                method: method,
+                path: path,
+                query: query,
+                body: body,
+                contentType: contentType,
+                anmeldung: anmeldung
+            )
         )
     }
 
@@ -260,7 +325,8 @@ actor EVAPIClient {
         path: String,
         query: [URLQueryItem],
         body: Data?,
-        credentials overrideCredentials: EVAPICredentials?
+        contentType: String = "application/json",
+        anmeldung: Anmeldung
     ) throws -> URLRequest {
         guard var components = URLComponents(
             url: baseURL.appendingPathComponent(path),
@@ -278,10 +344,10 @@ actor EVAPIClient {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let body {
             request.httpBody = body
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         }
-        if let credentials = overrideCredentials ?? credentials {
-            request.setValue(credentials.basicAuthHeaderValue, forHTTPHeaderField: "Authorization")
+        if let verwendete = anmeldung.credentials(gespeicherte: credentials) {
+            request.setValue(verwendete.basicAuthHeaderValue, forHTTPHeaderField: "Authorization")
         }
         return request
     }
@@ -308,5 +374,11 @@ actor EVAPIClient {
             let message = try? JSONDecoder().decode(EVErrorBody.self, from: data).message
             throw EVAPIError.server(status: http.statusCode, message: message)
         }
+    }
+}
+
+nonisolated private extension Data {
+    mutating func append(_ text: String) {
+        append(Data(text.utf8))
     }
 }
