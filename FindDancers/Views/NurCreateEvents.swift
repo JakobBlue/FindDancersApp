@@ -20,10 +20,29 @@ struct NurCreateEvents: View {
     @State private var isBusy = false
     @State private var statusMeldung: String?
     @State private var fehlermeldung: String?
+    @State private var adressStatus: AdressStatus = .unbekannt
+    /// Die Adresse, für die zuletzt gesucht wurde. Verhindert, dass beim
+    /// Öffnen des Formulars eine gespeicherte, eventuell von Hand verschobene
+    /// Pin durch eine erneute Suche überschrieben wird.
+    @State private var zuletztGesuchteAdresse: String
+    /// Wird nach einem Treffer erhöht, damit die Karte dorthin springt.
+    @State private var kartenAnstoss = 0
+
+    enum AdressStatus: Equatable {
+        case unbekannt
+        case wartet
+        case sucht
+        case gefunden(String)
+        case gefundenOhnePlz(String)
+        case nichtGefunden
+        case fehler(String)
+    }
 
     init(organizerId: String? = nil) {
         self.organizerId = organizerId
-        _entwurf = State(initialValue: EventFormularStore.shared.laden())
+        let geladen = EventFormularStore.shared.laden()
+        _entwurf = State(initialValue: geladen)
+        _zuletztGesuchteAdresse = State(initialValue: Self.adressSchluessel(geladen.neuerOrt))
     }
 
     private var isFormValid: Bool {
@@ -213,7 +232,7 @@ struct NurCreateEvents: View {
                     .tag(OrtModus.neuerOrt)
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
-            .frame(height: 480)
+            .frame(height: 540)
 
             seitenIndikator
         }
@@ -244,15 +263,24 @@ struct NurCreateEvents: View {
 
     private var neuerOrtSeite: some View {
         VStack(spacing: 8) {
-            ortFeld("Ortsname", text: $entwurf.neuerOrt.name)
+            // „Ortsname“ war unklar: gemeint ist der Name der Location
+            // (Venue.name in der EV-API), nicht die Stadt. Das Feld wächst
+            // mit dem Text von 1 auf bis zu 5 Zeilen.
+            ortFeld(
+                "Name der Location, z. B. Tanzsaal Nord",
+                text: $entwurf.neuerOrt.name,
+                zeilen: 1...5
+            )
             ortFeld("Straße & Nr.", text: $entwurf.neuerOrt.streetNr)
             ortFeld("PLZ", text: $entwurf.neuerOrt.zipcode)
                 .keyboardType(.numbersAndPunctuation)
             ortFeld("Stadt", text: $entwurf.neuerOrt.city)
+            adressStatusZeile
             // Koordinaten werden nicht getippt, sondern über die Karte gesetzt.
             OrtKarteView(
                 latitude: $entwurf.neuerOrt.latitude,
-                longitude: $entwurf.neuerOrt.longitude
+                longitude: $entwurf.neuerOrt.longitude,
+                zentrierungsAnstoss: kartenAnstoss
             )
 
             if !entwurf.neuerOrt.istLeer && !entwurf.neuerOrt.istVollstaendig {
@@ -265,10 +293,27 @@ struct NurCreateEvents: View {
         }
         .padding(.horizontal, 24)
         .frame(maxHeight: .infinity, alignment: .top)
+        // `task(id:)` bricht den laufenden Task bei jeder Änderung ab und
+        // startet ihn neu – die Wartezeit beginnt also nach dem letzten
+        // Tastendruck von vorn.
+        .task(id: adressSchluessel) {
+            guard adressSchluessel != zuletztGesuchteAdresse, adressIstSuchbar else { return }
+            adressStatus = .wartet
+            try? await Task.sleep(for: .seconds(4))
+            guard !Task.isCancelled else { return }
+            await geokodiereAdresse()
+        }
     }
 
-    private func ortFeld(_ platzhalter: String, text: Binding<String>) -> some View {
-        TextField(platzhalter, text: text)
+    /// `zeilen` erlaubt ein mitwachsendes Feld: es beginnt bei der unteren
+    /// Grenze und wird bis zur oberen Grenze höher, danach scrollt es intern.
+    private func ortFeld(
+        _ platzhalter: String,
+        text: Binding<String>,
+        zeilen: ClosedRange<Int> = 1...1
+    ) -> some View {
+        TextField(platzhalter, text: text, axis: .vertical)
+            .lineLimit(zeilen)
             .multilineTextAlignment(.center)
             .textFieldStyle(RoundedBorderTextFieldStyle())
             .textInputAutocapitalization(.words)
@@ -287,6 +332,88 @@ struct NurCreateEvents: View {
 
     private func ortBeschreibung(_ ort: EVVenue) -> String {
         [ort.name, ort.city].compactMap { $0 }.joined(separator: ", ")
+    }
+
+    // MARK: - Adresssuche
+
+    /// Straße, PLZ und Stadt als ein Wert – ändert sich einer davon, startet
+    /// die Wartezeit neu.
+    private var adressSchluessel: String {
+        Self.adressSchluessel(entwurf.neuerOrt)
+    }
+
+    private static func adressSchluessel(_ ort: NeuerOrtEntwurf) -> String {
+        [ort.streetNr, ort.zipcode, ort.city].map(\.trimmed).joined(separator: "|")
+    }
+
+    private var adressIstSuchbar: Bool {
+        !entwurf.neuerOrt.streetNr.trimmed.isEmpty || !entwurf.neuerOrt.city.trimmed.isEmpty
+    }
+
+    @ViewBuilder
+    private var adressStatusZeile: some View {
+        switch adressStatus {
+        case .unbekannt:
+            EmptyView()
+        case .wartet:
+            adressHinweis("Adresse wird in wenigen Sekunden gesucht …", farbe: .secondary)
+        case .sucht:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Adresse wird gesucht …").font(.caption2).foregroundStyle(.secondary)
+            }
+        case .gefunden(let bezeichnung):
+            adressHinweis("Gefunden: \(bezeichnung)", farbe: .secondary)
+        case .gefundenOhnePlz(let bezeichnung):
+            adressHinweis(
+                "Gefunden, aber nur ohne die PLZ: \(bezeichnung). Bitte PLZ prüfen "
+                + "oder die Pin von Hand setzen.",
+                farbe: .orange
+            )
+        case .nichtGefunden:
+            adressHinweis(
+                "Keine Adresse gefunden. Schreibweise prüfen oder die Pin von Hand setzen.",
+                farbe: .orange
+            )
+        case .fehler(let grund):
+            adressHinweis(grund, farbe: .orange)
+        }
+    }
+
+    private func adressHinweis(_ text: String, farbe: Color) -> some View {
+        Text(text)
+            .font(.caption2)
+            .foregroundStyle(farbe)
+            .multilineTextAlignment(.center)
+    }
+
+    /// Sucht die eingetippte Adresse und setzt Pin und Kamera auf den Treffer.
+    private func geokodiereAdresse() async {
+        let strasse = entwurf.neuerOrt.streetNr.trimmed
+        let plz = entwurf.neuerOrt.zipcode.trimmed
+        let stadt = entwurf.neuerOrt.city.trimmed
+
+        adressStatus = .sucht
+        zuletztGesuchteAdresse = adressSchluessel
+
+        do {
+            let antwort = try await Geokodierung.suche(strasse: strasse, plz: plz, stadt: stadt)
+            guard let treffer = antwort.treffer.first, let koordinate = treffer.koordinate else {
+                adressStatus = .nichtGefunden
+                return
+            }
+
+            entwurf.neuerOrt.latitude = koordinate.latitude
+            entwurf.neuerOrt.longitude = koordinate.longitude
+            kartenAnstoss += 1
+            adressStatus = antwort.plzIgnoriert
+                ? .gefundenOhnePlz(treffer.anzeigeName)
+                : .gefunden(treffer.anzeigeName)
+        } catch {
+            adressStatus = .fehler(
+                (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            )
+        }
     }
 
     // MARK: - Tänze

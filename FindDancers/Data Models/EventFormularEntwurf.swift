@@ -45,7 +45,7 @@ nonisolated struct NeuerOrtEntwurf: Codable, Equatable, Sendable {
 
     private var textfelder: [(bezeichnung: String, wert: String)] {
         [
-            ("Ortsname", name),
+            ("Name der Location", name),
             ("Straße & Nr.", streetNr),
             ("PLZ", zipcode),
             ("Stadt", city)

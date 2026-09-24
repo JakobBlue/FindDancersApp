@@ -15,6 +15,11 @@ import MapKit
 struct OrtKarteView: View {
     @Binding var latitude: Double?
     @Binding var longitude: Double?
+    /// Zähler, den der Aufrufer erhöht, wenn die Karte auf die – von außen
+    /// gesetzten – Koordinaten springen soll (z. B. nach einer Adresssuche).
+    /// Bewusst ein Anstoß und keine Reaktion auf jede Koordinatenänderung:
+    /// sonst würde die Kamera dem Nutzer beim Ziehen der Pin hinterherlaufen.
+    var zentrierungsAnstoss: Int = 0
 
     @State private var kamera: MapCameraPosition
     /// Nur für die Optik während des Ziehens – die Koordinate wird erst beim
@@ -25,9 +30,14 @@ struct OrtKarteView: View {
 
     /// Die Startkamera steht schon beim ersten Layout richtig: auf einer
     /// gespeicherten Pin, sonst auf dem Standort des Nutzers.
-    init(latitude: Binding<Double?>, longitude: Binding<Double?>) {
+    init(
+        latitude: Binding<Double?>,
+        longitude: Binding<Double?>,
+        zentrierungsAnstoss: Int = 0
+    ) {
         _latitude = latitude
         _longitude = longitude
+        self.zentrierungsAnstoss = zentrierungsAnstoss
 
         if let breite = latitude.wrappedValue, let laenge = longitude.wrappedValue {
             _kamera = State(
@@ -108,6 +118,9 @@ struct OrtKarteView: View {
             if koordinate == nil {
                 await uebernehmeAktuellenStandort()
             }
+        }
+        .onChange(of: zentrierungsAnstoss) { _, _ in
+            zeigeAufKarte()
         }
     }
 
