@@ -113,6 +113,11 @@ struct NurCreateEvents: View {
         .onChange(of: entwurf) { _, neuerEntwurf in
             EventFormularStore.shared.speichern(neuerEntwurf)
         }
+        // Hängt am ScrollView statt an einem EmptyView: ein EmptyView rendert
+        // nichts, Modifier daran feuern nicht verlässlich.
+        .onChange(of: entwurf.typ) { _, neuerTyp in
+            belegeKursEndeVor(fuer: neuerTyp)
+        }
         .task {
             verfuegbareOrte = (try? await EVAPIClient.shared.venues()) ?? []
         }
@@ -160,18 +165,18 @@ struct NurCreateEvents: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
         }
-        // Beim Wechsel auf „Kurs“ ein sinnvolles Enddatum vorbelegen, damit der
-        // Picker einen Wert hat. Ein bereits gewähltes Datum bleibt erhalten,
-        // auch wenn zwischenzeitlich ein anderer Typ ausgewählt war.
-        EmptyView()
-            .onChange(of: entwurf.typ) { _, neuerTyp in
-                guard neuerTyp == .Kurs, entwurf.letztes_datum_von_Kurs == nil else { return }
-                entwurf.letztes_datum_von_Kurs = Calendar.current.date(
-                    byAdding: .day,
-                    value: 7,
-                    to: entwurf.beginn
-                )
-            }
+    }
+
+    /// Beim Wechsel auf „Kurs“ ein sinnvolles Enddatum vorbelegen, damit der
+    /// Picker einen Wert hat. Ein bereits gewähltes Datum bleibt erhalten,
+    /// auch wenn zwischenzeitlich ein anderer Typ ausgewählt war.
+    private func belegeKursEndeVor(fuer neuerTyp: EventTyp) {
+        guard neuerTyp == .Kurs, entwurf.letztes_datum_von_Kurs == nil else { return }
+        entwurf.letztes_datum_von_Kurs = Calendar.current.date(
+            byAdding: .day,
+            value: 7,
+            to: entwurf.beginn
+        )
     }
 
     /// Der DatePicker braucht einen nicht-optionalen Wert; solange keiner

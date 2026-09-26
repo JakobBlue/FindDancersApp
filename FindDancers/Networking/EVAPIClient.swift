@@ -66,10 +66,6 @@ actor EVAPIClient {
         EVCredentialStore.clear()
     }
 
-    func hasCredentials() -> Bool {
-        credentials != nil
-    }
-
     // MARK: - Anmeldung
 
     /// Prüft die Zugangsdaten gegen die HTTP-Basic-Authentifizierung der EV-API.

@@ -64,9 +64,9 @@ nonisolated enum GeokodierungFehler: LocalizedError {
 
 nonisolated enum Geokodierung {
     /// Nominatim verlangt einen eindeutigen User-Agent mit Kontaktmöglichkeit,
-    /// sonst werden Anfragen blockiert. Vor einer Veröffentlichung hier eine
-    /// eigene Kontaktadresse eintragen.
-    private static let userAgent = "FindDancers/1.0 (jakobzoukdarmstadt@gmail.com)"
+    /// sonst werden Anfragen blockiert. Die Repo-URL erfüllt das, ohne eine
+    /// persönliche Adresse im Code zu hinterlegen.
+    private static let userAgent = "FindDancers/1.0 (+https://github.com/JakobBlue/FindDancersApp)"
 
     /// Sucht die Adresse strukturiert, also mit getrennten Feldern statt einem
     /// Freitext-Blob. Das liefert verlässlichere Treffer, weil Nominatim weiß,
